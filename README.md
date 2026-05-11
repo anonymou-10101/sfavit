@@ -17,7 +17,7 @@ pip install -r requirements.txt
 
 |   Model    | Resolution | Params (M) | Flops (G) | Top-1 Acc | Download |
 | :--------: | :--------: | :--------: | :-------: | :-------: | :------: |
-| SFA-ViT-P0 |   224x224  |     2.9    |    0.62   |   75.8%   | [here](https://drive.google.com/file/d/1SEwNArMhE-IWy9FA-XyMLmY-5FirLAV8/view?usp=sharing)|
+| SFA-ViT-P0 |   224x224  |     2.9    |    0.62   |   75.8%   | [here](https://drive.google.com/file/d/1ThJj9UnLnW-zjwPgrSblfzStxBpWo4vr/view?usp=drive_link)|
 | SFA-ViT-P1 |   224x224  |     5.0    |    1.04   |   79.4%   | [here](https://drive.google.com/file/d/1qy1fOaXMjIBR1brwZ39x26c7H9hWdKAl/view?usp=sharing) |
 | SFA-ViT-P2 |   224x224  |     6.0    |    1.35   |   80.8%   | [here](https://drive.google.com/file/d/1O11PYA3KVq-k9loP1DOGmZH0hta3bRdc/view?usp=sharing)    |
 | SFA-ViT-N  |   224x224  |    10.6    |    1.97   |   82.2%   | [here](https://drive.google.com/file/d/12B2cATh5tiPz6Oh1Ww3ozv6Cf3ApDyCo/view?usp=sharing)    |
@@ -44,12 +44,12 @@ bash ./scripts/SFAvit_t_224_1k.sh /path/to/imagenet-1k num_gpus
 ### Anaylysis 
 The code to validate accuracy of SFA-ViT.
 ```shell
-python validate.py /path/to/imagenet-1k --model SFAvit_t_224 --checkpoint /path/to/checkpoint --img-size 224
+python validate.py /path/to/imagenet-1k --model sfavit_t_224 --checkpoint /path/to/checkpoint --img-size 224
 ```
 
 The code to count params and flops of SFA-ViT variants
 ```shell
-python get_flops.py --model SFAvit_t_224  --img-size 224
+python get_flops.py --model sfavit_t_224  --img-size 224
 ```
 
 The code to visuallize Grad-CAM activation maps
