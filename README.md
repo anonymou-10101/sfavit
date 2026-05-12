@@ -17,7 +17,6 @@ pip install -r requirements.txt
 
 |   Model    | Resolution | Params (M) | Flops (G) | Top-1 Acc | Download |
 | :--------: | :--------: | :--------: | :-------: | :-------: | :------: |
-| SFA-ViT-P0 |   224x224  |     2.9    |    0.62   |   75.8%   | [here](https://drive.google.com/file/d/1ThJj9UnLnW-zjwPgrSblfzStxBpWo4vr/view?usp=drive_link)|
 | SFA-ViT-P1 |   224x224  |     5.0    |    1.04   |   79.4%   | [here](https://drive.google.com/file/d/1cwz46F61T7n5O25d2devR8A5YPHWH8Bw/view?usp=drive_link) |
 | SFA-ViT-P2 |   224x224  |     6.0    |    1.35   |   80.8%   | [here](https://drive.google.com/file/d/1x6wJdOQFDUwixa13n18tz4fFP5Ozy_rf/view?usp=drive_link)    |
 | SFA-ViT-N  |   224x224  |    10.6    |    1.97   |   82.2%   | [here](https://drive.google.com/file/d/1wp91nRojR4s2HbCraT4AYruCFuT2lCkW/view?usp=drive_link)    |
