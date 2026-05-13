@@ -35,7 +35,7 @@ pip install -r requirements.txt
 | SFA-ViT-B  |   384x384  |   100.0    |   51.7    |   86.3%   | [here](https://drive.google.com/file/d/1ml5yYYTi5ud1wzuwDETpyY1_U_vbS5g6/view?usp=drive_link) |
 
 ### Train
-The code to train MixViT on ImageNet-1k.
+The code to train SFA-ViT on ImageNet-1k.
 ```shell
 bash ./scripts/sfavit_t_224_1k.sh /path/to/imagenet-1k num_gpus
 ```
