@@ -485,19 +485,77 @@ class PartitionAttentionCl(nn.Module):
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
 
     def _partition_attn(self, x):
+
+        # x: NHWC.
+
+        # Dense prediction may feed feature maps whose H/W are not divisible by
+
+        # the attention partition size. We pad only inside partition attention
+
+        # and crop back immediately after reverse partition.
+
         img_size = x.shape[1:3]
+
+        H, W = img_size
+
+        part_h, part_w = self.partition_size
+
+
+
+        pad_h = (part_h - H % part_h) % part_h
+
+        pad_w = (part_w - W % part_w) % part_w
+
+
+
+        if pad_h > 0 or pad_w > 0:
+
+            # For NHWC tensors, F.pad receives padding from the last dimension:
+
+            # (C_left, C_right, W_left, W_right, H_top, H_bottom).
+
+            x = F.pad(x, (0, 0, 0, pad_w, 0, pad_h))
+
+
+
+        padded_size = x.shape[1:3]
+
+
+
         if self.partition_block:
+
             partitioned = local_partition(x, self.partition_size)
+
         else:
+
             partitioned = global_partition(x, self.partition_size)
+
+
 
         partitioned = self.attn(partitioned)
 
+
+
         if self.partition_block:
-            x = local_reverse(partitioned, self.partition_size, img_size)
+
+            x = local_reverse(partitioned, self.partition_size, padded_size)
+
         else:
-            x = global_reverse(partitioned, self.partition_size, img_size)
+
+            x = global_reverse(partitioned, self.partition_size, padded_size)
+
+
+
+        if pad_h > 0 or pad_w > 0:
+
+            x = x[:, :H, :W, :].contiguous()
+
+
+
         return x
+
+
+
 
     def forward(self, x):
         x = x + self.drop_path1(self.ls1(self._partition_attn(self.norm1(x))))
@@ -635,17 +693,19 @@ class SFAVitBlock(nn.Module):
         x = self.conv(x)
 
         B, C, H, W = x.shape
-
         x = x.permute(0, 2, 3, 1).contiguous()
-        x = self.attn_local(x)
-        x = x.permute(0, 3, 1, 2).contiguous()
 
-        x = x.flatten(2).transpose(1,2).contiguous()
+        if self.attn_local is not None:
+            x = self.attn_local(x)
+
+        x = x.reshape(B, H * W, C)
         x = self.attn_inter(x, (H, W))
-        x = x.reshape(B, H, W, C).contiguous()
 
+        x = x.reshape(B, H, W, C).contiguous()
         x = self.attn_global(x)
-        x = x.permute(0, 3, 1, 2).contiguous()
+
+        x = x.permute(0, 3, 1, 2).contiguous(memory_format=torch.channels_last)
+
         return x
 
 
@@ -802,6 +862,7 @@ class SFAVit(nn.Module):
         self.fork_feat = fork_feat
         self.pretrained_path = pretrained_path
         img_size = to_2tuple(img_size)
+        self.img_size = img_size
 
         transformer_cfg = cfg_window_size(cfg.transformer_cfg, img_size)
         self.num_classes = num_classes
@@ -1113,7 +1174,7 @@ default_cfgs = generate_default_cfgs({
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
     'sfavit_t_384.in1k': _cfg(
         file='/path/to/checkpoint', 
-        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash'
+        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash',
     ),
     
     'sfavit_s_224.in1k': _cfg(
@@ -1121,7 +1182,7 @@ default_cfgs = generate_default_cfgs({
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
     'sfavit_s_384.in1k': _cfg(
         file='/path/to/checkpoint', 
-        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash'
+        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash',
     ),
 
     'sfavit_m_224.in1k': _cfg(
@@ -1129,7 +1190,7 @@ default_cfgs = generate_default_cfgs({
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
     'sfavit_m_384.in1k': _cfg(
         file='/path/to/checkpoint', 
-        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash'
+        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash',
     ),
 
     'sfavit_b_224.in1k': _cfg(
@@ -1141,7 +1202,7 @@ default_cfgs = generate_default_cfgs({
         mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
     'sfavit_b_384.in1k': _cfg(
         file='/path/to/checkpoint', 
-        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash'
+        input_size=(3, 384, 384), pool_size=(12, 12), crop_pct=0.95, crop_mode='squash',
     ),
 })
 
