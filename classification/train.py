@@ -30,24 +30,24 @@ import torch
 import torch.nn as nn
 import torchvision.utils
 import yaml
-from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
 from timm import utils
-from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
+from timm.data import create_dataset, create_loader, create_naflex_loader, resolve_data_config, \
+    Mixup, FastCollateMixup, AugMixDataset
 from timm.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
 from timm.loss import JsdCrossEntropy, SoftTargetCrossEntropy, BinaryCrossEntropy, LabelSmoothingCrossEntropy
 from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
-from timm.utils import ApexScaler, NativeScaler
+from timm.utils import NativeScaler
+from fvcore.nn import FlopCountAnalysis, flop_count_table, flop_count_str
 
-try:
-    from apex import amp
-    from apex.parallel import DistributedDataParallel as ApexDDP
-    from apex.parallel import convert_syncbn_model
-    has_apex = True
-except ImportError:
-    has_apex = False
+from timm.task import (
+    ClassificationTask,
+    LogitDistillationTask,
+    FeatureDistillationTask,
+    TokenDistillationTask,
+)
 
 
 try:
@@ -172,11 +172,9 @@ group = parser.add_argument_group('Device parameters')
 group.add_argument('--device', default='cuda', type=str,
                     help="Device (accelerator) to use.")
 group.add_argument('--amp', action='store_true', default=False,
-                   help='use NVIDIA Apex AMP or Native AMP for mixed precision training')
+                   help='use AMP for mixed precision training')
 group.add_argument('--amp-dtype', default='float16', type=str,
                    help='lower precision AMP dtype (default: float16)')
-group.add_argument('--amp-impl', default='native', type=str,
-                   help='AMP impl to use, "native" or "apex" (default: native)')
 group.add_argument('--model-dtype', default=None, type=str,
                    help='Model dtype override (non-AMP) (default: float32)')
 group.add_argument('--no-ddp-bb', action='store_true', default=False,
@@ -205,6 +203,10 @@ group.add_argument('--clip-mode', type=str, default='norm',
                    help='Gradient clipping mode. One of ("norm", "value", "agc")')
 group.add_argument('--layer-decay', type=float, default=None,
                    help='layer-wise learning rate decay (default: None)')
+group.add_argument('--layer-decay-min-scale', type=float, default=0,
+                   help='layer-wise lr decay minimum scale clamp (default: 0)')
+group.add_argument('--layer-decay-no-opt-scale', type=float, default=None,
+                   help='layer-wise lr decay no optimization scale (default: None)')
 group.add_argument('--opt-kwargs', nargs='*', default={}, action=utils.ParseKwargs)
 
 # Learning rate schedule parameters
@@ -253,7 +255,7 @@ group.add_argument('--warmup-epochs', type=int, default=5, metavar='N',
                    help='epochs to warmup LR, if scheduler supports')
 group.add_argument('--warmup-prefix', action='store_true', default=False,
                    help='Exclude warmup period from decay schedule.'),
-group.add_argument('--cooldown-epochs', type=int, default=0, metavar='N',
+group.add_argument('--cooldown-epochs', type=int, default=100, metavar='N',
                    help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
 group.add_argument('--patience-epochs', type=int, default=10, metavar='N',
                    help='patience epochs for Plateau LR scheduler (default: 10)')
@@ -340,7 +342,7 @@ group.add_argument('--bn-momentum', type=float, default=None,
 group.add_argument('--bn-eps', type=float, default=None,
                    help='BatchNorm epsilon override (if not None)')
 group.add_argument('--sync-bn', action='store_true',
-                   help='Enable NVIDIA Apex or Torch synchronized BatchNorm.')
+                   help='Enable synchronized BatchNorm.')
 group.add_argument('--dist-bn', type=str, default='reduce',
                    help='Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")')
 group.add_argument('--split-bn', action='store_true',
@@ -365,6 +367,8 @@ group.add_argument('--worker-seeding', type=str, default='all',
                    help='worker seed mode (default: all)')
 group.add_argument('--log-interval', type=int, default=50, metavar='N',
                    help='how many batches to wait before logging training status')
+group.add_argument('--val-interval', type=int, default=1, metavar='N',
+                   help='how many epochs between validation and checkpointing')
 group.add_argument('--recovery-interval', type=int, default=0, metavar='N',
                    help='how many batches to wait before writing recovery checkpoint')
 group.add_argument('--checkpoint-hist', type=int, default=10, metavar='N',
@@ -396,7 +400,41 @@ group.add_argument('--wandb-tags', default=[], type=str, nargs='+',
 group.add_argument('--wandb-resume-id', default='', type=str, metavar='ID',
                    help='If resuming a run, the id of the run in wandb')
 
-import models
+# NaFlex scheduled loader arguments
+group.add_argument('--naflex-loader', action='store_true', default=False,
+                   help='Use NaFlex loader (Requires NaFlex compatible model)')
+group.add_argument('--naflex-train-seq-lens', type=int, nargs='+', default=[128, 256, 576, 784, 1024],
+                   help='Sequence lengths to use for NaFlex loader')
+group.add_argument('--naflex-max-seq-len', type=int, default=576,
+                   help='Fixed maximum sequence length for NaFlex loader (validation)')
+group.add_argument('--naflex-patch-sizes', type=int, nargs='+', default=None,
+                   help='List of patch sizes for variable patch size training (e.g., 8 12 16 24 32)')
+group.add_argument('--naflex-patch-size-probs', type=float, nargs='+', default=None,
+                   help='Probabilities for each patch size (must sum to 1.0, uniform if not specified)')
+group.add_argument('--naflex-loss-scale', default='linear', type=str,
+                   help='Scale loss (gradient) by batch_size ("none", "sqrt", or "linear")')
+
+# Knowledge Distillation parameters
+parser.add_argument('--kd-model-name', default=None, type=str,
+                    help='Name of teacher model for knowledge distillation')
+parser.add_argument('--kd-distill-type', default='logit', type=str, choices=['logit', 'feature', 'token'],
+                    help='Type of distillation: "logit" for output distillation, "feature" for intermediate features, "token" for models with distillation heads (default: logit)')
+parser.add_argument('--kd-loss-type', default='kl', type=str,
+                    help='Loss function for logit distillation (default: kl). Currently only "kl" supported, reserved for future extensions.')
+parser.add_argument('--distill-loss-weight', default=None, type=float,
+                    help='Weight for distillation loss. If both weights specified: loss = task_weight * task + distill_weight * distill. '
+                         'If only task_weight: loss = task_weight * task + (1-task_weight) * distill. Default: 1.0 if only this specified.')
+parser.add_argument('--task-loss-weight', default=None, type=float,
+                    help='Weight for task (classification) loss. See --distill-loss-weight for weighting modes. Default: 1.0 if unspecified.')
+parser.add_argument('--kd-temperature', default=4.0, type=float,
+                    help='Temperature for softmax in distillation (default: 4.0, typical range: 1-4)')
+parser.add_argument('--kd-student-feature-dim', default=None, type=int,
+                    help='Student model feature dimension (auto-detected from model.head_hidden_size or model.num_features if not specified)')
+parser.add_argument('--kd-teacher-feature-dim', default=None, type=int,
+                    help='Teacher model feature dimension (auto-detected from model.head_hidden_size or model.num_features if not specified)')
+parser.add_argument('--kd-token-distill-type', default='soft', type=str, choices=['soft', 'hard'],
+                    help='Token distillation type: "soft" for KL-div with temperature, "hard" for CE with teacher argmax (default: soft)')
+
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -445,18 +483,11 @@ def main():
         if model_dtype == torch.float16:
             _logger.warning('float16 is not recommended for training, for half precision bfloat16 is recommended.')
 
-    # resolve AMP arguments based on PyTorch / Apex availability
-    use_amp = None
+    # resolve AMP arguments based on PyTorch availability
     amp_dtype = torch.float16
     if args.amp:
         assert model_dtype is None or model_dtype == torch.float32, 'float32 model dtype must be used with AMP'
-        if args.amp_impl == 'apex':
-            assert has_apex, 'AMP impl specified as APEX but APEX is not installed.'
-            use_amp = 'apex'
-            assert args.amp_dtype == 'float16'
-        else:
-            use_amp = 'native'
-            assert args.amp_dtype in ('float16', 'bfloat16')
+        assert args.amp_dtype in ('float16', 'bfloat16')
         if args.amp_dtype == 'bfloat16':
             amp_dtype = torch.bfloat16
 
@@ -475,11 +506,10 @@ def main():
 
     factory_kwargs = {}
     if args.pretrained_path:
-        # merge with pretrained_cfg of model, 'file' has priority over 'url' and 'hf_hub'.
-        factory_kwargs['pretrained_cfg_overlay'] = dict(
-            file=args.pretrained_path,
-            num_classes=-1,  # force head adaptation
-        )
+        pretrained_overlay = dict(file=args.pretrained_path)
+        if args.num_classes is not None and args.num_classes != 1000:
+            pretrained_overlay['num_classes'] = -1
+        factory_kwargs['pretrained_cfg_overlay'] = pretrained_overlay
 
     model = create_model(
         args.model,
@@ -508,8 +538,16 @@ def main():
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
 
+    if args.local_rank == 0:
+         _logger.info(
+         f'Model {safe_model_name(args.model)} created, '
+         f'param count:{sum([m.numel() for m in model.parameters()])}')
+
     if args.grad_checkpointing:
         model.set_grad_checkpointing(enable=True)
+
+    # Create training task (classification or distillation)
+    task = None
 
     if utils.is_primary(args):
         _logger.info(
@@ -537,20 +575,19 @@ def main():
     if args.distributed and args.sync_bn:
         args.dist_bn = ''  # disable dist_bn when sync BN active
         assert not args.split_bn
-        if has_apex and use_amp == 'apex':
-            # Apex SyncBN used with Apex AMP
-            # WARNING this won't currently work with models using BatchNormAct2d
-            model = convert_syncbn_model(model)
-        else:
-            model = convert_sync_batchnorm(model)
+        model = convert_sync_batchnorm(model)
         if utils.is_primary(args):
             _logger.info(
                 'Converted model to use Synchronized BatchNorm. WARNING: You may have issues if using '
                 'zero initialized BN layers (enabled by default for ResNets) while sync-bn enabled.')
 
+    model_patch_size = None
+    if args.naflex_loader:
+        # NaFlexVit models have embeds.patch_size. Needs to be extracted here before mutating the model.
+        model_patch_size = getattr(getattr(model, "embeds", None), "patch_size", None)
+
     if args.torchscript:
         assert not args.torchcompile
-        assert not use_amp == 'apex', 'Cannot use APEX AMP with torchscripted model'
         assert not args.sync_bn, 'Cannot use SyncBatchNorm with torchscripted model'
         model = torch.jit.script(model)
 
@@ -584,13 +621,7 @@ def main():
     # setup automatic mixed-precision (AMP) loss scaling and op casting
     amp_autocast = suppress  # do nothing
     loss_scaler = None
-    if use_amp == 'apex':
-        assert device.type == 'cuda'
-        model, optimizer = amp.initialize(model, optimizer, opt_level='O1')
-        loss_scaler = ApexScaler()
-        if utils.is_primary(args):
-            _logger.info('Using NVIDIA APEX AMP. Training in mixed precision.')
-    elif use_amp == 'native':
+    if args.amp:
         amp_autocast = partial(torch.autocast, device_type=device.type, dtype=amp_dtype)
         if device.type in ('cuda',) and amp_dtype == torch.float16:
             # loss scaler only used for float16 (half) dtype, bfloat16 does not need it
@@ -610,6 +641,7 @@ def main():
             optimizer=None if args.no_resume_opt else optimizer,
             loss_scaler=None if args.no_resume_opt else loss_scaler,
             log_info=utils.is_primary(args),
+            weights_only=False,
         )
 
     # setup exponential moving average of model weights, SWA could be used here too
@@ -625,25 +657,11 @@ def main():
         if args.resume:
             load_checkpoint(model_ema.module, args.resume, use_ema=True)
         if args.torchcompile:
-            model_ema = torch.compile(model_ema, backend=args.torchcompile)
-
-    # setup distributed training
-    if args.distributed:
-        if has_apex and use_amp == 'apex':
-            # Apex DDP preferred unless native amp is activated
-            if utils.is_primary(args):
-                _logger.info("Using NVIDIA APEX DistributedDataParallel.")
-            model = ApexDDP(model, delay_allreduce=True)
-        else:
-            if utils.is_primary(args):
-                _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[device], broadcast_buffers=not args.no_ddp_bb)
-        # NOTE: EMA model does not need to be wrapped by DDP
-
-    if args.torchcompile:
-        # torch compile should be done after DDP
-        assert has_compile, 'A version of torch w/ torch.compile() is required for --compile, possibly a nightly.'
-        model = torch.compile(model, backend=args.torchcompile, mode=args.torchcompile_mode)
+            model_ema = torch.compile(
+                model_ema,
+                backend=args.torchcompile,
+                mode=args.torchcompile_mode,
+            )
 
     # create the train and eval datasets
     if args.data and not args.data_dir:
@@ -670,6 +688,7 @@ def main():
         trust_remote_code=args.dataset_trust_remote_code,
     )
 
+    dataset_eval = None
     if args.val_split:
         dataset_eval = create_dataset(
             args.dataset,
@@ -686,38 +705,23 @@ def main():
             trust_remote_code=args.dataset_trust_remote_code,
         )
 
-    # setup mixup / cutmix
-    collate_fn = None
-    mixup_fn = None
-    mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
-    if mixup_active:
-        mixup_args = dict(
-            mixup_alpha=args.mixup,
-            cutmix_alpha=args.cutmix,
-            cutmix_minmax=args.cutmix_minmax,
-            prob=args.mixup_prob,
-            switch_prob=args.mixup_switch_prob,
-            mode=args.mixup_mode,
-            label_smoothing=args.smoothing,
-            num_classes=args.num_classes
-        )
-        if args.prefetcher:
-            assert not num_aug_splits  # collate conflict (need to support de-interleaving in collate mixup)
-            collate_fn = FastCollateMixup(**mixup_args)
-        else:
-            mixup_fn = Mixup(**mixup_args)
-
-    # wrap dataset in AugMix helper
-    if num_aug_splits > 1:
-        dataset_train = AugMixDataset(dataset_train, num_splits=num_aug_splits)
-
     # create data loaders w/ augmentation pipeline
     train_interpolation = args.train_interpolation
     if args.no_aug or not train_interpolation:
         train_interpolation = data_config['interpolation']
-    loader_train = create_loader(
-        dataset_train,
-        input_size=data_config['input_size'],
+        
+    # Check if we should use the NaFlex scheduled loader
+    common_loader_kwargs = dict(
+        mean=data_config['mean'],
+        std=data_config['std'],
+        pin_memory=args.pin_mem,
+        img_dtype=model_dtype or torch.float32,
+        device=device,
+        distributed=args.distributed,
+        use_prefetcher=args.prefetcher,
+    )
+
+    train_loader_kwargs = dict(
         batch_size=args.batch_size,
         is_training=True,
         no_aug=args.no_aug,
@@ -738,41 +742,131 @@ def main():
         num_aug_repeats=args.aug_repeats,
         num_aug_splits=num_aug_splits,
         interpolation=train_interpolation,
-        mean=data_config['mean'],
-        std=data_config['std'],
         num_workers=args.workers,
-        distributed=args.distributed,
-        collate_fn=collate_fn,
-        pin_memory=args.pin_mem,
-        img_dtype=model_dtype or torch.float32,
-        device=device,
-        use_prefetcher=args.prefetcher,
-        use_multi_epochs_loader=args.use_multi_epochs_loader,
         worker_seeding=args.worker_seeding,
     )
 
+    mixup_fn = None
+    mixup_args = {}
+    mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
+    if mixup_active:
+        mixup_args = dict(
+            mixup_alpha=args.mixup,
+            cutmix_alpha=args.cutmix,
+            cutmix_minmax=args.cutmix_minmax,
+            prob=args.mixup_prob,
+            switch_prob=args.mixup_switch_prob,
+            mode=args.mixup_mode,
+            label_smoothing=args.smoothing,
+            num_classes=args.num_classes
+        )
+
+    naflex_mode = False
+    if args.naflex_loader:
+        if utils.is_primary(args):
+            _logger.info('Using NaFlex loader')
+
+        assert num_aug_splits <= 1, 'Augmentation splits not supported in NaFlex mode'
+        naflex_mixup_fn = None
+        if mixup_active:
+            from timm.data import NaFlexMixup
+            mixup_args.pop('mode')  # not supported
+            mixup_args.pop('cutmix_minmax')  # not supported
+            naflex_mixup_fn = NaFlexMixup(**mixup_args)
+
+        # Check if we have model's patch size for NaFlex mode
+        if model_patch_size is None:
+            # Fallback to default
+            model_patch_size = (16, 16)
+            if utils.is_primary(args):
+                _logger.warning(f'Could not determine model patch size, using default: {model_patch_size}')
+
+        # Configure patch sizes for NaFlex loader
+        patch_loader_kwargs = {}
+        if args.naflex_patch_sizes:
+            # Variable patch size mode
+            patch_loader_kwargs['patch_size_choices'] = args.naflex_patch_sizes
+            if args.naflex_patch_size_probs:
+                if len(args.naflex_patch_size_probs) != len(args.naflex_patch_sizes):
+                    parser.error('--naflex-patch-size-probs must have same length as --naflex-patch-sizes')
+                patch_loader_kwargs['patch_size_choice_probs'] = args.naflex_patch_size_probs
+            if utils.is_primary(args):
+                _logger.info(f'Using variable patch sizes: {args.naflex_patch_sizes}')
+        else:
+            # Single patch size mode - use model's patch size
+            patch_loader_kwargs['patch_size'] = model_patch_size
+            if utils.is_primary(args):
+                _logger.info(f'Using model patch size: {model_patch_size}')
+
+        naflex_mode = True
+        loader_train = create_naflex_loader(
+            dataset=dataset_train,
+            train_seq_lens=args.naflex_train_seq_lens,
+            mixup_fn=naflex_mixup_fn,
+            rank=args.rank,
+            world_size=args.world_size,
+            **patch_loader_kwargs,
+            **common_loader_kwargs,
+            **train_loader_kwargs,
+        )
+    else:
+        # setup mixup / cutmix
+        collate_fn = None
+        if mixup_active:
+            if args.prefetcher:
+                assert not num_aug_splits  # collate conflict (need to support de-interleaving in collate mixup)
+                collate_fn = FastCollateMixup(**mixup_args)
+            else:
+                mixup_fn = Mixup(**mixup_args)
+
+        # wrap dataset in AugMix helper
+        if num_aug_splits > 1:
+            dataset_train = AugMixDataset(dataset_train, num_splits=num_aug_splits)
+
+        # Use standard loader
+        loader_train = create_loader(
+            dataset_train,
+            input_size=data_config['input_size'],
+            collate_fn=collate_fn,
+            use_multi_epochs_loader=args.use_multi_epochs_loader,
+            **common_loader_kwargs,
+            **train_loader_kwargs,
+        )
+
     loader_eval = None
     if args.val_split:
+        assert dataset_eval is not None
         eval_workers = args.workers
         if args.distributed and ('tfds' in args.dataset or 'wds' in args.dataset):
             # FIXME reduces validation padding issues when using TFDS, WDS w/ workers and distributed training
             eval_workers = min(2, args.workers)
-        loader_eval = create_loader(
-            dataset_eval,
-            input_size=data_config['input_size'],
+
+        eval_loader_kwargs = dict(
             batch_size=args.validation_batch_size or args.batch_size,
             is_training=False,
             interpolation=data_config['interpolation'],
-            mean=data_config['mean'],
-            std=data_config['std'],
             num_workers=eval_workers,
-            distributed=args.distributed,
             crop_pct=data_config['crop_pct'],
-            pin_memory=args.pin_mem,
-            img_dtype=model_dtype or torch.float32,
-            device=device,
-            use_prefetcher=args.prefetcher,
+            crop_mode=data_config.get('crop_mode', None),
         )
+
+        if args.naflex_loader:
+            # Use largest sequence length for validation
+            loader_eval = create_naflex_loader(
+                dataset=dataset_eval,
+                patch_size=model_patch_size,  # Use model's native patch size (already determined above)
+                max_seq_len=args.naflex_max_seq_len,
+                **common_loader_kwargs,
+                **eval_loader_kwargs
+            )
+        else:
+            # Use standard loader
+            loader_eval = create_loader(
+                dataset_eval,
+                input_size=data_config['input_size'],
+                **common_loader_kwargs,
+                **eval_loader_kwargs,
+            )
 
     # setup loss function
     if args.jsd_loss:
@@ -802,6 +896,73 @@ def main():
         train_loss_fn = nn.CrossEntropyLoss()
     train_loss_fn = train_loss_fn.to(device=device)
     validate_loss_fn = nn.CrossEntropyLoss().to(device=device)
+
+    # Setup training task (classification or distillation)
+    if args.kd_model_name is not None:
+        # Create distillation task (teacher created internally from model name)
+        if args.kd_distill_type == 'logit':
+            task = LogitDistillationTask(
+                student_model=model,
+                teacher_model=args.kd_model_name,
+                criterion=train_loss_fn,
+                loss_type=args.kd_loss_type,
+                distill_loss_weight=args.distill_loss_weight,
+                task_loss_weight=args.task_loss_weight,
+                temperature=args.kd_temperature,
+                device=device,
+                dtype=model_dtype,
+                verbose=utils.is_primary(args),
+            )
+        elif args.kd_distill_type == 'feature':
+            task = FeatureDistillationTask(
+                student_model=model,
+                teacher_model=args.kd_model_name,
+                criterion=train_loss_fn,
+                distill_loss_weight=args.distill_loss_weight,
+                task_loss_weight=args.task_loss_weight,
+                student_feature_dim=args.kd_student_feature_dim,
+                teacher_feature_dim=args.kd_teacher_feature_dim,
+                device=device,
+                dtype=model_dtype,
+                verbose=utils.is_primary(args),
+            )
+        elif args.kd_distill_type == 'token':
+            task = TokenDistillationTask(
+                student_model=model,
+                teacher_model=args.kd_model_name,
+                criterion=train_loss_fn,
+                distill_type=args.kd_token_distill_type,
+                distill_loss_weight=args.distill_loss_weight,
+                task_loss_weight=args.task_loss_weight,
+                temperature=args.kd_temperature,
+                device=device,
+                dtype=model_dtype,
+                verbose=utils.is_primary(args),
+            )
+        else:
+            raise ValueError(f"Unknown distillation type: {args.kd_distill_type}")
+    else:
+        # Standard classification task
+        task = ClassificationTask(
+            model=model,
+            criterion=train_loss_fn,
+            device=device,
+            dtype=model_dtype,
+            verbose=utils.is_primary(args),
+        )
+
+    # Prepare task for distributed training
+    if args.distributed:
+        if utils.is_primary(args):
+            _logger.info("Preparing task for distributed training")
+        task.prepare_distributed(device_ids=[device])
+
+    # Compile task if requested (should be done after DDP)
+    if args.torchcompile:
+        assert has_compile, 'A version of torch w/ torch.compile() is required for --compile, possibly a nightly.'
+        if utils.is_primary(args):
+            _logger.info(f"Compiling task with backend={args.torchcompile}, mode={args.torchcompile_mode}")
+        task = torch.compile(task, backend=args.torchcompile, mode=args.torchcompile_mode)
 
     # setup checkpoint saver and eval metric tracking
     eval_metric = args.eval_metric if loader_eval is not None else 'loss'
@@ -891,8 +1052,9 @@ def main():
                 model,
                 loader_train,
                 optimizer,
-                train_loss_fn,
                 args,
+                task=task,
+                device=device,
                 lr_scheduler=lr_scheduler,
                 saver=saver,
                 output_dir=output_dir,
@@ -902,12 +1064,25 @@ def main():
                 model_ema=model_ema,
                 mixup_fn=mixup_fn,
                 num_updates_total=num_epochs * updates_per_epoch,
+                naflex_mode=naflex_mode,
             )
 
             if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
                 if utils.is_primary(args):
                     _logger.info("Distributing BatchNorm running means and vars")
                 utils.distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
+
+            epoch_p_1 = epoch + 1
+            if epoch_p_1 % args.val_interval != 0 and epoch_p_1 != num_epochs:
+                if utils.is_primary(args):
+                    _logger.info("Skipping eval and checkpointing ")
+                if lr_scheduler is not None:
+                    # step LR for next epoch, take care when using metric dependent lr_scheduler
+                    lr_scheduler.step(epoch_p_1, metric=None)
+                # Skip validation and metric logic
+                # FIXME we could make the logic below able to handle no eval metrics more gracefully,
+                #  but for simplicity opting to just skip for now.
+                continue
 
             if loader_eval is not None:
                 eval_metrics = validate(
@@ -960,7 +1135,7 @@ def main():
 
             if lr_scheduler is not None:
                 # step LR for next epoch
-                lr_scheduler.step(epoch + 1, latest_metric)
+                lr_scheduler.step(epoch_p_1, latest_metric)
 
             latest_results = {
                 'epoch': epoch,
@@ -972,6 +1147,9 @@ def main():
 
     except KeyboardInterrupt:
         pass
+
+    if args.distributed:
+        torch.distributed.destroy_process_group()
 
     if best_metric is not None:
         # log best metric as tracked by checkpoint saver
@@ -992,8 +1170,8 @@ def train_one_epoch(
         model,
         loader,
         optimizer,
-        loss_fn,
         args,
+        task=None,
         device=torch.device('cuda'),
         lr_scheduler=None,
         saver=None,
@@ -1004,6 +1182,7 @@ def train_one_epoch(
         model_ema=None,
         mixup_fn=None,
         num_updates_total=None,
+        naflex_mode=False,
 ):
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
         if args.prefetcher and loader.mixup_enabled:
@@ -1048,11 +1227,13 @@ def train_one_epoch(
 
         def _forward():
             with amp_autocast():
-                output = model(input)
-                loss = loss_fn(output, target)
+                # Task handles the complete forward pass and loss computation
+                result = task(input, target)
+                _loss = result['loss']
+
             if accum_steps > 1:
-                loss /= accum_steps
-            return loss
+                _loss /= accum_steps
+            return _loss, result
 
         def _backward(_loss):
             if loss_scaler is not None:
@@ -1076,16 +1257,57 @@ def train_one_epoch(
                         )
                     optimizer.step()
 
-        if has_no_sync and not need_update:
-            with model.no_sync():
-                loss = _forward()
-                _backward(loss)
-        else:
-            loss = _forward()
-            _backward(loss)
+        if naflex_mode:
+            assert isinstance(input, dict)
+            batch_size = input['patches'].shape[0]
 
-        losses_m.update(loss.item() * accum_steps, input.size(0))
-        update_sample_count += input.size(0)
+            # scale gradient vs the minimum batch size (for max seq len)
+            if not args.naflex_loss_scale or args.naflex_loss_scale == 'none':
+                local_scale = 1.0
+            else:
+                local_scale = (batch_size / args.batch_size)
+                if local_scale == 'sqrt':
+                    local_scale = local_scale ** 0.5
+
+            if args.distributed:
+                # scale gradient btw distributed ranks, each one can have different batch size
+                global_batch_size = utils.reduce_tensor(
+                    torch.tensor(batch_size, device=device, dtype=torch.float32),
+                    1 # SUM
+                )
+                dist_scale = args.world_size * batch_size / global_batch_size
+            else:
+                dist_scale = None
+                global_batch_size = batch_size
+
+            if has_no_sync and not need_update:
+                with model.no_sync():
+                    loss, result = _forward()
+                    scaled_loss = local_scale * loss
+                    if dist_scale is not None:
+                        scaled_loss *= dist_scale
+                    _backward(scaled_loss)
+            else:
+                loss, result = _forward()
+                scaled_loss = local_scale * loss
+                if dist_scale is not None:
+                    scaled_loss *= dist_scale
+                _backward(scaled_loss)
+        else:
+            global_batch_size = batch_size = input.shape[0]
+            if args.distributed:
+                global_batch_size *= args.world_size
+
+            if has_no_sync and not need_update:
+                with model.no_sync():
+                    loss, result = _forward()
+                    _backward(loss)
+            else:
+                loss, result = _forward()
+                _backward(loss)
+
+        losses_m.update(loss.item() * accum_steps, batch_size)
+        update_sample_count += global_batch_size
 
         if not need_update:
             data_start_time = time.time()
@@ -1102,10 +1324,11 @@ def train_one_epoch(
             elif device.type == 'npu':
                 torch.npu.synchronize()
         time_now = time.time()
+
         update_time_m.update(time.time() - update_start_time)
         update_start_time = time_now
 
-        if update_idx % args.log_interval == 0:
+        if update_idx % args.log_interval == 0 or last_batch:
             lrl = [param_group['lr'] for param_group in optimizer.param_groups]
             lr = sum(lrl) / len(lrl)
 
@@ -1114,7 +1337,6 @@ def train_one_epoch(
                 # synchronize current step and avg loss, each process keeps its own running avg
                 loss_avg = utils.reduce_tensor(loss.new([loss_avg]), args.world_size).item()
                 loss_now = utils.reduce_tensor(loss.new([loss_now]), args.world_size).item()
-                update_sample_count *= args.world_size
 
             if utils.is_primary(args):
                 _logger.info(
@@ -1176,7 +1398,7 @@ def validate(
 
     end = time.time()
     last_idx = len(loader) - 1
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_idx, (input, target) in enumerate(loader):
             last_batch = batch_idx == last_idx
             if not args.prefetcher:
@@ -1211,9 +1433,10 @@ def validate(
             elif device.type == "npu":
                 torch.npu.synchronize()
 
-            losses_m.update(reduced_loss.item(), input.size(0))
-            top1_m.update(acc1.item(), output.size(0))
-            top5_m.update(acc5.item(), output.size(0))
+            batch_size = output.shape[0]
+            losses_m.update(reduced_loss.item(), batch_size)
+            top1_m.update(acc1.item(), batch_size)
+            top5_m.update(acc5.item(), batch_size)
 
             batch_time_m.update(time.time() - end)
             end = time.time()
