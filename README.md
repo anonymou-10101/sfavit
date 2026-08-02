@@ -28,7 +28,7 @@ pip install -r requirements.txt
 
 | Model | Resolution | Params (M) | FLOPs (G) | Top-1 Acc. | Checkpoint |
 | :---: | :--------: | ---------: | --------: | ---------: | :--------: |
-| SFA-ViT-P1 | 224×224 | 5.0 | 1.04 | 79.4% | [Download](https://drive.google.com/file/d/1cwz46F61T7n5O25d2devR8A5YPHWH8Bw/view?usp=drive_link) |
+| SFA-ViT-P1 | 224×224 | 5.0 | 1.04 | 79.4% | [Download](https://drive.google.com/file/d/1HZ485-r0flBugpKyI_Ou7nwqS5mV8Wdc/view?usp=drive_link) |
 | SFA-ViT-P2 | 224×224 | 6.0 | 1.35 | 80.8% | [Download](https://drive.google.com/file/d/1x6wJdOQFDUwixa13n18tz4fFP5Ozy_rf/view?usp=drive_link) |
 | SFA-ViT-N | 224×224 | 10.6 | 1.97 | 82.2% | [Download](https://drive.google.com/file/d/1wp91nRojR4s2HbCraT4AYruCFuT2lCkW/view?usp=drive_link) |
 | SFA-ViT-T | 224×224 | 23.3 | 4.6 | 84.2% | [Download](https://drive.google.com/file/d/1lKVhoW2cobAxYJaTqOUZgk-KAT3er3HF/view?usp=drive_link) |
@@ -36,6 +36,9 @@ pip install -r requirements.txt
 | SFA-ViT-M | 224×224 | 69.7 | 12.4 | 85.3% | [Download](https://drive.google.com/file/d/1_6V3v2dUOPwTmOk4_TwIrCu0EfwelHmF/view?usp=drive_link) |
 | SFA-ViT-B | 224×224 | 100.0 | 17.0 | 85.5% | [Download](https://drive.google.com/file/d/1NfftjR1dZPHZLwTScPWt_yO_4i0s_-Ql/view?usp=drive_link) |
 | SFA-ViT-B | 256×256 | 100.0 | 22.2 | 85.8% | [Download](https://drive.google.com/file/d/11ibSJJZTNlGH02DnBpF2ZPlPSDCxS0to/view?usp=drive_link) |
+
+
+
 
 #### Fine-Tuned Models
 
