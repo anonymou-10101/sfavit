@@ -1,6 +1,7 @@
 # SFA-ViT: Subband-Factorized Spatial-Frequency Attention for Vision Transformers
 
 ![Accuracy-efficiency comparison](./fig1.png)
+Comparison of image classification on ImageNet-1K. Our models are trained from scratch at **224×224** resolution unless otherwise noted. † denote **256×256** training/evaluation.
 
 SFA-ViT is a vision transformer architecture designed for spatial-frequency representation learning. Instead of modeling all visual tokens only in the spatial domain, SFA-ViT first organizes visual features into wavelet subbands through a lightweight embedding stem. It then factorizes attention into within-subband spatial modeling and cross-subband interaction.
 
