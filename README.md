@@ -101,9 +101,9 @@ Figure 3: Grad-CAM visualizations of different ViT models.
 
 | Method | Backbone | Pretraining | Resolution | Params | FLOPs | LR Schedule | Box mAP | Box AP50 | Box AP75 | Mask mAP | Mask AP50 | Mask AP75 | Checkpoint |
 | :----: | :------: | :---------: | :--------: | -----: | ----: | :---------: | ------: | -------: | -------: | -------: | --------: | --------: | :--------: |
-| Mask R-CNN | SFA-ViT-T | ImageNet-1K | 1333×800 | M | G | MS 1× | 45.8 | 68.8 | 50.0 | 41.4 | 65.4 | 44.2 | [Download](https://drive.google.com/file/d/1NM3iFBt1rbqK4eGiyuL5v5wKXzEeO2uk/view?usp=drive_link) |
+| Mask R-CNN | SFA-ViT-T | ImageNet-1K | 1333×800 | M     | G      | MS 1× | 45.8 | 68.8 | 50.0 | 41.4 | 65.4 | 44.2 | [Download](https://drive.google.com/file/d/1NM3iFBt1rbqK4eGiyuL5v5wKXzEeO2uk/view?usp=drive_link) |
 | Mask R-CNN | SFA-ViT-T | ImageNet-1K | 1120×896 | 42.7M | 254.6G | MS 3× | 48.6 | 70.6 | 53.6 | 43.7 | 67.6 | 47.2 | [Download](https://drive.google.com/file/d/1NM3iFBt1rbqK4eGiyuL5v5wKXzEeO2uk/view?usp=drive_link) |
-| Mask R-CNN | SFA-ViT-T | ImageNet-1K | 1333×800 |  M |  G | MS 3× | 48.5 | 70.6 | 53.1 | 43.6 | 67.5 | 46.9 | [Download](https://drive.google.com/file/d/1NM3iFBt1rbqK4eGiyuL5v5wKXzEeO2uk/view?usp=drive_link) |
+| Mask R-CNN | SFA-ViT-T | ImageNet-1K | 1333×800 |  M    |  G     | MS 3× | 48.6 | 70.7 | 53.2 | 43.6 | 67.8 | 46.6 | [Download](https://drive.google.com/file/d/1NM3iFBt1rbqK4eGiyuL5v5wKXzEeO2uk/view?usp=drive_link) |
 
 ### Cascade Mask R-CNN
 
