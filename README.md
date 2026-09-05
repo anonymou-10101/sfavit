@@ -34,7 +34,7 @@ pip install -r requirements.txt
 | SFA-ViT-T | 224×224 | 23.3 | 4.6 | 84.3% | [Download](https://drive.google.com/file/d/1lKVhoW2cobAxYJaTqOUZgk-KAT3er3HF/view?usp=drive_link) |
 | SFA-ViT-S | 224×224 | 41.7 | 7.5 | 84.8% | [Download](https://drive.google.com/file/d/1wDG9wbh-eP-xkDkPktnjnxjmXohij6m3/view?usp=drive_link) |
 | SFA-ViT-M | 224×224 | 69.7 | 12.4 | 85.3% | [Download](https://drive.google.com/file/d/1_6V3v2dUOPwTmOk4_TwIrCu0EfwelHmF/view?usp=drive_link) |
-| SFA-ViT-B | 224×224 | 100.0 | 17.0 | 85.5% | [Download](https://drive.google.com/file/d/1NfftjR1dZPHZLwTScPWt_yO_4i0s_-Ql/view?usp=drive_link) |
+| SFA-ViT-B | 224×224 | 100.0 | 17.0 | 85.6% | [Download](https://drive.google.com/file/d/1NfftjR1dZPHZLwTScPWt_yO_4i0s_-Ql/view?usp=drive_link) |
 | SFA-ViT-B | 256×256 | 100.0 | 22.2 | 85.8% | [Download](https://drive.google.com/file/d/11ibSJJZTNlGH02DnBpF2ZPlPSDCxS0to/view?usp=drive_link) |
 
 
