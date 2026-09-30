@@ -44,10 +44,10 @@ pip install -r requirements.txt
 
 | Model | Resolution | Params (M) | FLOPs (G) | Top-1 Acc. | Checkpoint |
 | :---: | :--------: | ---------: | --------: | ---------: | :--------: |
-| SFA-ViT-T | 384×384 | 23.3 | 14.1 | 85.3% | [Download](https://drive.google.com/file/d/1jyxFexCE3wYNkoiHvx2jCUaC5dyCzAk3/view?usp=drive_link) |
-| SFA-ViT-S | 384×384 | 41.8 | 22.9 | 85.8% | [Download](https://drive.google.com/file/d/1EMxVrvHDl_hdnzjdm4jRxCgjl1HAtSX4/view?usp=drive_link) |
+| SFA-ViT-T | 384×384 | 23.3 | 14.1 | 85.4% | [Download](https://drive.google.com/file/d/1jyxFexCE3wYNkoiHvx2jCUaC5dyCzAk3/view?usp=drive_link) |
+| SFA-ViT-S | 384×384 | 41.8 | 22.9 | 86.0% | [Download](https://drive.google.com/file/d/1EMxVrvHDl_hdnzjdm4jRxCgjl1HAtSX4/view?usp=drive_link) |
 | SFA-ViT-M | 384×384 | 69.7 | 37.8 | 86.2% | [Download](https://drive.google.com/file/d/1tGoE8rd_QSoPwRjynjJwBeFCPlGHqURa/view?usp=drive_link) |
-| SFA-ViT-B | 384×384 | 100.0 | 51.7 | 86.3% | [Download](https://drive.google.com/file/d/1ml5yYYTi5ud1wzuwDETpyY1_U_vbS5g6/view?usp=drive_link) |
+| SFA-ViT-B | 384×384 | 100.0 | 51.7 | 86.4% | [Download](https://drive.google.com/file/d/1ml5yYYTi5ud1wzuwDETpyY1_U_vbS5g6/view?usp=drive_link) |
 
 ### Training on ImageNet-1K
 
